@@ -62,6 +62,8 @@ header.top{display:flex;align-items:baseline;justify-content:space-between;margi
 .facts{display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap}
 .facts div{font-size:.85rem;color:var(--muted)}
 .facts b{display:block;font-family:"Bricolage Grotesque",sans-serif;font-size:1.35rem;color:var(--ink)}
+.src{margin:-4px 0 14px;font-size:.88rem;color:var(--muted)}
+.src a{color:var(--leaf);font-weight:700}
 .swap{width:100%;padding:11px;border-radius:12px;border:1px solid var(--line);background:transparent;font-weight:700;cursor:pointer}
 .primary{width:100%;padding:16px;border:0;border-radius:16px;background:var(--leaf);color:var(--bg);font-weight:700;font-size:1.05rem;cursor:pointer;margin-top:4px}
 .ghost{background:none;border:0;color:var(--muted);text-decoration:underline;cursor:pointer;padding:10px 0;display:block;margin:6px auto 0}
@@ -156,7 +158,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--citrus);outline
   <section class="view" id="v-set">
     <label class="f" for="key">Anthropic API key</label>
     <div class="keyrow"><input class="field" id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"><button id="keyTest">Test</button></div>
-    <div class="hint">Stored only on this phone and sent only to Anthropic. Model: <span id="modelName"></span>.</div>
+    <div class="hint">Stored only on this phone and sent only to Anthropic. Models: <span id="modelName"></span>.</div>
 
     <label class="f" for="likesIn">Flavours I like</label>
     <div class="chips" id="likes"></div>
@@ -205,7 +207,24 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--citrus);outline
 
 <script>
 /* ====== Config ====== */
-const MODEL = "claude-sonnet-5-5";
+const MODEL = "claude-sonnet-5-5";       // menu ideas, swaps, requests (with web search)
+const LIST_MODEL = "claude-haiku-5-5";   // scaling, merging and sorting the Coop list
+const MAX_MIN = 30;                      // max total time per recipe, in minutes
+// What grows in Switzerland each month (stored crops included). Index 0 = January.
+const SEASON = [
+  "leeks, white/red/savoy cabbage, kale, Brussels sprouts, carrots, celeriac, parsnips, beetroot, black salsify, potatoes, onions, chicory, lamb’s lettuce, apples, pears",
+  "leeks, white/red/savoy cabbage, kale, Brussels sprouts, carrots, celeriac, parsnips, beetroot, black salsify, potatoes, onions, chicory, lamb’s lettuce, apples, pears",
+  "leeks, cabbage, carrots, celeriac, beetroot, potatoes, onions, chicory, lamb’s lettuce, first spinach, wild garlic, apples",
+  "spinach, wild garlic, radishes, spring onions, lettuce, first asparagus, chicory, rhubarb, stored carrots and potatoes",
+  "asparagus, spinach, radishes, peas, lettuce, kohlrabi, spring onions, new potatoes, rhubarb, strawberries",
+  "courgettes, peas, broad beans, kohlrabi, fennel, cucumber, lettuce, new potatoes, spring onions, strawberries, cherries",
+  "courgettes, tomatoes, cucumber, green beans, peppers, aubergine, fennel, sweetcorn, potatoes, apricots, berries",
+  "tomatoes, peppers, aubergine, courgettes, green beans, sweetcorn, cucumber, fennel, potatoes, plums, apricots, berries",
+  "tomatoes, peppers, aubergine, courgettes, green beans, squash, leeks, fennel, chard, potatoes, plums, apples, pears, grapes",
+  "squash and pumpkin, leeks, cabbage, kale, beetroot, carrots, celeriac, fennel, chard, potatoes, apples, pears, grapes, chestnuts",
+  "squash and pumpkin, leeks, white/red/savoy cabbage, kale, Brussels sprouts, beetroot, celeriac, carrots, parsnips, black salsify, chicory, lamb’s lettuce, potatoes, apples, pears, chestnuts",
+  "leeks, white/red/savoy cabbage, kale, Brussels sprouts, beetroot, celeriac, carrots, parsnips, black salsify, chicory, lamb’s lettuce, potatoes, squash, apples, pears"
+];
 const AISLES = ["Fruits and vegetables","Chilled","Dry goods","Oils, canned goods and spices","Frozen"];
 
 /* ====== Storage ====== */
@@ -254,17 +273,19 @@ function systemPrompt(){
     "Permanent constraints:\n" +
     (S.noFish ? "- Vegetarian only: no meat, no fish, no seafood, ever (eggs and dairy are fine).\n" : "- Vegetarian or fish only. No meat, ever.\n") +
     "- For 1 person, about 5 to 6 portions spread over Monday to Friday.\n" +
-    "- Healthy, bold flavours, simple cooking, keeps 3 to 4 days in the fridge, freezes well, recipes share ingredients.\n" +
+    "- Healthy, tasty, keeps 3 to 4 days in the fridge, recipes share ingredients.\n" +
     "- Store: Coop (Switzerland). Metric units, products sold there.\n" +
     "How to cook for this person:\n" +
-    "- Cohesive: each recipe is one coherent dish rooted in a real culinary tradition (a Sicilian caponata, a Keralan moilee, a Persian kuku). Never mash up cuisines or stack ingredients to tick boxes. Every ingredient must earn its place.\n" +
-    "- Seasonal: it is " + new Date().toLocaleDateString("en-GB",{month:"long"}) + " in Switzerland. Build each dish around produce that is in season here right now, and avoid out-of-season produce.\n" +
-    "- Inspired: cook like a thoughtful chef. Give each dish one signature touch (a sauce, a crunchy topping, a quick pickle, a herb oil) that makes it feel special, while keeping it simple to batch cook.\n" +
+    "- Simple, everyday, healthy home cooking: easy weeknight food, not restaurant food. Short ingredient lists, nothing hard to find at Coop.\n" +
+    `- Quick: each recipe takes ${MAX_MIN} minutes or less from start to finish, prep included. Put the realistic total in "timeMin".\n` +
+    "- Seasonal (very important): it is " + new Date().toLocaleDateString("en-GB",{month:"long"}) + " in Switzerland. The fresh vegetables and fruit at the heart of each dish must come from what is in season here now: " + SEASON[new Date().getMonth()] + ". Out-of-season fresh produce is not allowed. Pantry staples, canned tomatoes and pulses, frozen peas or spinach, and lemon or other citrus as an accent are fine.\n" +
+    "- Real: each recipe must be an actual published recipe that you found with web search, ideally from Coop’s own fooby.ch, Betty Bossi, BBC Good Food or a similar reputable site. Stay faithful to it, adapting only what the rules require. Put the exact page you used in \"source\", with the URL copied from your search results.\n" +
+    "- Cohesive: each recipe is one coherent dish. Never mash up cuisines or add ingredients just to tick boxes.\n" +
     "- Varied: change cuisines, cooking methods and main proteins from week to week.\n" +
     "Flavours the person likes. Gentle guidance, not a checklist: a dish may feature one or two of them where they truly belong, or none. Never force them in:\n" + list(S.likes) + "\n" +
     "Flavours the person only tolerates (use sparingly, never as the star):\n" + list(S.tolerates) + "\n" +
     "Flavours the person does NOT like (exclude strictly, even as a minor ingredient):\n" + list(S.dislikes) + "\n" +
-    "Always give your answer by calling the answer tool.";
+    "Search the web for real recipes first, then give your answer by calling the answer tool.";
 }
 function rulesText(fishCount){
   const banned = bannedTolerated();
@@ -275,9 +296,10 @@ function rulesText(fishCount){
     "- Use at most one tolerated ingredient across both recipes, only if it truly fits. List any used in \"tolerated\" (else []).\n" +
     "- Never use a disliked ingredient.\n";
 }
-const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","cuisine":"Sicilian","line":"one appetising sentence","tolerated":[]}';
+const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","cuisine":"Swiss","timeMin":25,"line":"one appetising sentence","source":{"title":"...","url":"https://..."},"ingredients":[{"name":"...","qty":"for the portions given"}],"steps":["..."],"tolerated":[]}';
 
-function checkRecipes(recipes, fishCount){
+const normUrl = u => String(u||"").trim().replace(/#.*$/,"").replace(/\/+$/,"").toLowerCase();
+function checkRecipes(recipes, fishCount, urls){
   const p = [];
   if (fishCount !== null){
     const n = recipes.filter(r => r.type === "fish").length;
@@ -287,9 +309,16 @@ function checkRecipes(recipes, fishCount){
   const banned = bannedTolerated().map(x=>x.toLowerCase());
   recipes.forEach(r => {
     if (!(Number(r.proteinG) >= S.protein)) p.push(`"${r.name}" needs at least ${S.protein} g protein per portion`);
-    const text = (r.name+" "+r.line+" "+r.protein).toLowerCase();
+    const text = (r.name+" "+r.line+" "+r.protein+" "+(r.ingredients||[]).map(x=>x.name).join(" ")).toLowerCase();
     S.dislikes.forEach(d => { if (text.includes(d.toLowerCase())) p.push(`"${r.name}" contains "${d}", which is disliked`); });
     (r.tolerated||[]).forEach(t => { if (banned.includes(String(t).toLowerCase())) p.push(`"${r.name}" uses "${t}", which was used recently`); });
+  });
+  recipes.forEach(r => {
+    if (!(Number(r.timeMin) > 0 && Number(r.timeMin) <= MAX_MIN)) p.push(`"${r.name}" must take ${MAX_MIN} minutes or less in total`);
+    const u = normUrl(r.source && r.source.url);
+    if (!u) p.push(`"${r.name}" needs a source URL`);
+    else if (urls && urls.size && !urls.has(u)) p.push(`the source for "${r.name}" must be a page from your web search results`);
+    if (!Array.isArray(r.ingredients) || !r.ingredients.length) p.push(`"${r.name}" needs its ingredient list`);
   });
   const tol = recipes.reduce((n,r)=> n + (r.tolerated||[]).length, 0);
   if (tol > 1) p.push("use at most one tolerated ingredient across both recipes");
@@ -297,7 +326,7 @@ function checkRecipes(recipes, fishCount){
 }
 
 /* ====== Claude API ====== */
-async function callClaude(system, user, maxTokens, tool){
+async function callClaude(system, user, maxTokens, tool, opts = {}){
   if (!S.key) throw new Error("Add your Anthropic API key in Settings first.");
   let res;
   try {
@@ -309,14 +338,16 @@ async function callClaude(system, user, maxTokens, tool){
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
-      body: JSON.stringify(Object.assign({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] },
-        tool ? { tools: [tool] } : {}))
+      body: JSON.stringify(Object.assign({ model: opts.model || MODEL, max_tokens: maxTokens, system,
+          messages: opts.messages || [{ role: "user", content: user }] },
+        (tool || opts.search) ? { tools: [].concat(opts.search ? [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }] : [], tool ? [tool] : []) } : {}))
     });
   } catch(e){ throw new Error("Couldn’t reach Anthropic. Check your connection and try again."); }
   const data = await res.json().catch(()=> ({}));
   if (!res.ok){
     const m = data?.error?.message || res.statusText;
     if (res.status === 401) throw new Error("Your API key was rejected. Check it in Settings.");
+    if (/web.?search/i.test(m)) { logErr({ status: res.status, message: m }); throw new Error("Web search isn’t available for your key. Enable it in the Anthropic Console, then try again."); }
     if (res.status === 429) throw new Error("Rate limit reached. Wait a minute and try again.");
     if (res.status === 529 || res.status >= 500) throw new Error("Anthropic is busy right now. Try again shortly.");
     logErr({ status: res.status, message: m });
@@ -331,36 +362,46 @@ function tryParse(raw){
   try { return JSON.parse(clean.slice(s, e+1)); } catch(err){ return null; }
 }
 function logErr(info){ store.set("lastError", Object.assign({ when: new Date().toISOString(), model: MODEL }, info)); }
-async function callJson(system, user, maxTokens, schema){
+async function callJson(system, user, maxTokens, schema, opts = {}){
   const tool = { name: "answer", description: "Return the answer as structured data.", input_schema: schema };
-  let data;
+  let data, urls = new Set();
   for (let attempt = 0; attempt < 3; attempt++){
-    data = await callClaude(system, user + "\nGive your answer only by calling the answer tool, with no other text." + (attempt ? " Keep every text field short and concise." : ""), maxTokens, tool);
-    const block = (data.content || []).find(b => b.type === "tool_use");
-    if (data.stop_reason !== "max_tokens" && block && block.input && typeof block.input === "object") return block.input;
-    const raw = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+    const msg = user + "\nGive your final answer only by calling the answer tool, with no other text." + (attempt ? " Keep every text field short and concise." : "");
+    let messages = [{ role: "user", content: msg }], content = [];
+    for (let turn = 0; turn < 4; turn++){
+      data = await callClaude(system, msg, maxTokens, tool, { model: opts.model, search: opts.search, messages });
+      content = content.concat(data.content || []);
+      if (data.stop_reason !== "pause_turn") break;
+      messages = messages.concat([{ role: "assistant", content: data.content }]);
+    }
+    content.filter(b => b.type === "web_search_tool_result" && Array.isArray(b.content))
+      .forEach(b => b.content.forEach(r => { if (r.url) urls.add(normUrl(r.url)); }));
+    const block = content.find(b => b.type === "tool_use" && b.name === "answer");
+    if (data.stop_reason !== "max_tokens" && block && block.input && typeof block.input === "object") return { input: block.input, urls };
+    const raw = content.filter(b => b.type === "text").map(b => b.text).join("");
     const parsed = data.stop_reason !== "max_tokens" && tryParse(raw);
-    if (parsed) return parsed;
-    logErr({ stop_reason: data.stop_reason, text: raw.slice(0, 1500), tool_input: block ? JSON.stringify(block.input).slice(0, 1500) : null });
+    if (parsed) return { input: parsed, urls };
+    logErr({ model: opts.model || MODEL, stop_reason: data.stop_reason, text: raw.slice(0, 1500), tool_input: block ? JSON.stringify(block.input).slice(0, 1500) : null });
   }
   throw new Error(data && data.stop_reason === "max_tokens" ? "Claude’s answer was cut off. Try again." : "Claude’s answer wasn’t readable. Details are in Settings → Troubleshooting.");
 }
 const STR = { type: "string" }, STRS = { type: "array", items: STR };
 const RECIPES_SCHEMA = { type: "object", required: ["recipes"], properties: { recipes: { type: "array", items: { type: "object",
-  required: ["name","short","type","portions","proteinG","protein","cuisine","line","tolerated"],
-  properties: { name: STR, short: STR, cuisine: STR, type: { type: "string", enum: ["veg","fish"] }, portions: { type: "integer" }, proteinG: { type: "number" }, protein: STR, line: STR, tolerated: STRS } } } } };
-const PLAN_SCHEMA = { type: "object", required: ["list","pantry","recipes","days","steps"], properties: {
+  required: ["name","short","type","portions","proteinG","protein","cuisine","timeMin","line","source","ingredients","steps","tolerated"],
+  properties: { name: STR, short: STR, cuisine: STR, timeMin: { type: "integer" }, steps: STRS,
+    source: { type: "object", required: ["title","url"], properties: { title: STR, url: STR } },
+    ingredients: { type: "array", items: { type: "object", required: ["name","qty"], properties: { name: STR, qty: STR } } }, type: { type: "string", enum: ["veg","fish"] }, portions: { type: "integer" }, proteinG: { type: "number" }, protein: STR, line: STR, tolerated: STRS } } } } };
+const PLAN_SCHEMA = { type: "object", required: ["list","pantry","days","steps"], properties: {
   list: { type: "array", items: { type: "object", required: ["aisle","items"], properties: { aisle: STR, items: { type: "array", items: { type: "object", required: ["name","qty","tags"], properties: { name: STR, qty: STR, tags: STRS } } } } } },
   pantry: STRS,
-  recipes: { type: "array", items: { type: "object", required: ["name","short","portions","time","steps"], properties: { name: STR, short: STR, portions: { type: "integer" }, time: STR, steps: STRS } } },
   days: { type: "array", items: { type: "object", required: ["day","recipe"], properties: { day: STR, recipe: { type: "integer" } } } },
   steps: STRS } };
 async function generate(prompt, fishCount){
   let problems = [], recipes = null;
   for (let i = 0; i < 3; i++){
-    const d = await callJson(systemPrompt(), prompt + (problems.length ? "\nYour previous answer had these problems, fix them: " + problems.join("; ") : ""), 2000, RECIPES_SCHEMA);
+    const { input: d, urls } = await callJson(systemPrompt(), prompt + (problems.length ? "\nYour previous answer had these problems, fix them: " + problems.join("; ") : ""), 6000, RECIPES_SCHEMA, { search: true });
     recipes = (d.recipes || []).slice(0, 2);
-    problems = recipes.length === 2 ? checkRecipes(recipes, fishCount) : ["there must be exactly 2 recipes"];
+    problems = recipes.length === 2 ? checkRecipes(recipes, fishCount, urls) : ["there must be exactly 2 recipes"];
     if (!problems.length) return { recipes, warnings: [] };
   }
   if (!recipes || recipes.length !== 2) throw new Error("Claude didn’t return 2 valid recipes. Try again.");
@@ -378,7 +419,7 @@ async function run(text, fn){
 const proposeMenu = () => run("Finding two good ideas…", async () => {
   const draws = [rollFish(), rollFish()], fishCount = draws.filter(Boolean).length, names = avoidNames();
   const res = await generate(
-    "Propose exactly 2 recipes that batch well. They should share a few ingredients so shopping stays lean, but differ in cuisine, cooking method and texture (for example one braise, one roast), so the week feels varied.\n" +
+    `Find exactly 2 real, simple, seasonal recipes, each ready in ${MAX_MIN} minutes or less, that keep well in the fridge. They should share a few ingredients so shopping stays lean, but differ in cuisine and texture, so the week feels varied.\n` +
     (names.length ? "Don’t repeat these recent recipes: " + names.join(", ") + "\n" : "") +
     (recentCuisines().length ? "Recent cuisines, pick different ones this week: " + recentCuisines().join(", ") + "\n" : "") +
     `Recipe 1 must be ${kindOf(draws[0])}. Recipe 2 must be ${kindOf(draws[1])}.\n` +
@@ -393,7 +434,7 @@ const swapRecipe = idx => run("Looking for another idea…", async () => {
   menu.fishCount = (other.type === "fish" ? 1 : 0) + (newFish ? 1 : 0);
   const res = await generate(
     "Current menu: " + JSON.stringify(menu.recipes) + "\n" +
-    `Replace ONLY recipe number ${idx+1} with a different, coherent, seasonal dish from another tradition than "${other.name}", sharing a few of its ingredients. Keep the other recipe exactly as is.\n` +
+    `Replace ONLY recipe number ${idx+1} with a different real, simple, seasonal recipe (${MAX_MIN} minutes or less) from another cuisine than "${other.name}", sharing a few of its ingredients. Keep the other recipe exactly as is, including its source, ingredients and steps.\n` +
     `The new recipe ${idx+1} must be ${kindOf(newFish)}.\n` +
     "Don’t propose any of these: " + avoidNames(menu.rejected).join(", ") + "\n" +
     rulesText(menu.fishCount) + 'JSON format: {"recipes":[' + RECIPE_SHAPE + "," + RECIPE_SHAPE + "]} (both recipes of the final menu, in order)", menu.fishCount);
@@ -412,17 +453,19 @@ const askChange = text => run("Adjusting your menu…", async () => {
   store.set("menu", menu); toast("Menu updated");
 });
 const keepMenu = () => run("Writing your Coop list…", async () => {
-  const d = await callJson(systemPrompt(),
-    "Chosen menu: " + JSON.stringify(menu.recipes) + "\n" +
-    "Prepare the full plan for 1 person, meals Monday to Friday (5 to 6 portions). Don’t change the recipes.\n" +
-    "- Scale quantities and round to what’s sold in the store (a block, a can, a bunch).\n" +
+  const slim = menu.recipes.map(r => ({ short: r.short, name: r.name, portions: r.portions || 3, ingredients: r.ingredients || [] }));
+  const { input: d } = await callJson(
+    "You turn recipes into a tidy shopping list for Coop (Switzerland). Metric units. Always reply in English. Give your answer by calling the answer tool.",
+    "Recipes with their ingredients for the portions shown: " + JSON.stringify(slim) + "\n" +
+    "Build the shopping list for 1 person, meals Monday to Friday. Don’t change the recipes or add ingredients.\n" +
+    "- Round each quantity up to what’s sold in the store (a block, a can, a bunch, a 500 g bag).\n" +
     "- Merge duplicate ingredients into one line; put the recipes using each one (by their \"short\" name) in \"tags\".\n" +
-    "- Pantry basics (oil, salt, pepper, common spices you’d expect at home) go in \"pantry\", not in the list.\n" +
+    "- Basics most kitchens have (salt, pepper, oil, common dried spices) go in \"pantry\", not in the list.\n" +
     "- Aisles, in this exact order: " + AISLES.join(", ") + " (omit empty aisles).\n" +
     "- \"days\": Monday to Friday, which recipe (1 or 2) is eaten each day.\n" +
-    "- \"steps\": cooking order to run things in parallel, how to portion into boxes, what stays in the fridge (3 to 4 days), what to freeze for the last days, what to add only at serving time.\n" +
-    'JSON format: {"list":[{"aisle":"...","items":[{"name":"...","qty":"...","tags":["..."]}]}],"pantry":["..."],' +
-    '"recipes":[{"name":"...","short":"...","portions":3,"time":"35 min","steps":["..."]}],"days":[{"day":"Mon","recipe":1}],"steps":["..."]}', 8000, PLAN_SCHEMA);
+    "- \"steps\": 3 to 5 short tips: cooking order to run both recipes in parallel, portioning into boxes, what keeps 3 to 4 days in the fridge, what to add only at serving time.\n" +
+    'JSON format: {"list":[{"aisle":"...","items":[{"name":"...","qty":"...","tags":["..."]}]}],"pantry":["..."],"days":[{"day":"Mon","recipe":1}],"steps":["..."]}',
+    4000, PLAN_SCHEMA, { model: LIST_MODEL });
   if (!Array.isArray(d.list) || !d.list.length) throw new Error("The list came back empty. Try again.");
   plan = Object.assign({ week: thisWeek }, d);
   store.set("plan", plan);
@@ -460,7 +503,8 @@ function renderMenu(){
       <h2>${esc(r.name)}</h2><p>${esc(r.line)}</p>
       <div class="facts"><div><b>${esc(r.portions||3)}</b>portions</div>
         <div><b>${esc(r.proteinG)} g</b>${Number(r.proteinG)>=S.protein?"protein, goal met ✓":"protein, under your goal"}</div>
-        <div><b>${esc(String(r.protein||"").split(",")[0])}</b>main source</div></div>
+        <div><b>${esc(r.timeMin||"?")} min</b>total</div></div>
+      ${r.source && r.source.url ? `<p class="src">Based on <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${esc(r.source.title || "the original recipe")}</a></p>` : ""}
       ${final ? "" : `<button class="swap" data-i="${i}">Swap this one</button>`}</article>`).join("") +
     (final
       ? `<button class="primary" id="toList">Open my Coop list</button><button class="ghost" id="restart">Start a new menu for this week</button>`
@@ -525,7 +569,7 @@ function renderPlan(){
     v.innerHTML = `<div class="empty"><h2>No plan yet</h2><p>Your cooking order, recipes and week appear here once you keep a menu.</p></div>`; return;
   }
   const rs = menu?.recipes || [];
-  const label = n => { const r = (plan.recipes||[])[n-1] || rs[n-1] || {}; return r.short || r.name || ("Recipe " + n); };
+  const label = n => { const r = rs[n-1] || {}; return r.short || r.name || ("Recipe " + n); };
   const isFish = n => (rs[n-1]||{}).type === "fish";
   let html = "";
   if (Array.isArray(plan.days) && plan.days.length){
@@ -534,15 +578,18 @@ function renderPlan(){
   if (Array.isArray(plan.steps) && plan.steps.length){
     html += `<div class="block"><h2>Cooking order</h2><ol>${plan.steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol></div>`;
   }
-  (plan.recipes||[]).forEach(r => {
-    html += `<div class="block"><h2>${esc(r.name)}</h2><div class="meta">${esc(r.portions||3)} portions${r.time?", "+esc(r.time):""}</div><ol>${(r.steps||[]).map(s=>`<li>${esc(s)}</li>`).join("")}</ol></div>`;
+  rs.forEach(r => {
+    html += `<div class="block"><h2>${esc(r.name)}</h2><div class="meta">${esc(r.portions||3)} portions, ${esc(r.timeMin||"?")} min</div>` +
+      (r.ingredients && r.ingredients.length ? `<ul>${r.ingredients.map(x=>`<li>${esc(x.qty)} ${esc(x.name)}</li>`).join("")}</ul><br>` : "") +
+      `<ol>${(r.steps||[]).map(s=>`<li>${esc(s)}</li>`).join("")}</ol>` +
+      (r.source && r.source.url ? `<p class="src">Source: <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${esc(r.source.title || r.source.url)}</a></p>` : "") + `</div>`;
   });
   v.innerHTML = html;
 }
 
 /* ====== Render: settings ====== */
 function renderSettings(){
-  $("#modelName").textContent = MODEL;
+  $("#modelName").textContent = MODEL + " for menus, " + LIST_MODEL + " for lists";
   $("#pVal").textContent = S.protein + " g";
   $("#fVal").textContent = "1 in " + S.fishEvery;
   $("#noFish").checked = S.noFish;
