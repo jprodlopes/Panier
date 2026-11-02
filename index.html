@@ -241,7 +241,8 @@ function busy(on, text){ $("#busy").classList.toggle("on", on); if(text) $("#bus
 /* ====== Rules ====== */
 function recent(days){ return history.filter(h => daysAgo(h.week) < days); }
 function fishShare(){ const h = recent(28); let f=0,t=0; h.forEach(r=>{ t += r.portions||3; if(r.type==="fish") f += r.portions||3; }); return {f,t}; }
-function fishCountForWeek(){ if (S.noFish) return 0; const {f,t} = fishShare(); return (t===0 || f/t < 1/S.fishEvery) ? 1 : 0; }
+function rollFish(){ return !S.noFish && Math.random() < 1/S.fishEvery; }
+const kindOf = f => f ? "a fish recipe (\"type\":\"fish\")" : "vegetarian (\"type\":\"veg\")";
 function bannedTolerated(){
   const used = new Set(); recent(28).forEach(h => (h.tolerated||[]).forEach(x => used.add(String(x).toLowerCase())));
   return S.tolerates.filter(t => used.has(t.toLowerCase()));
@@ -309,7 +310,7 @@ async function callClaude(system, user, maxTokens, tool){
         "anthropic-dangerous-direct-browser-access": "true"
       },
       body: JSON.stringify(Object.assign({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] },
-        tool ? { tools: [tool], tool_choice: { type: "tool", name: tool.name } } : {}))
+        tool ? { tools: [tool] } : {}))
     });
   } catch(e){ throw new Error("Couldn’t reach Anthropic. Check your connection and try again."); }
   const data = await res.json().catch(()=> ({}));
@@ -333,8 +334,8 @@ function logErr(info){ store.set("lastError", Object.assign({ when: new Date().t
 async function callJson(system, user, maxTokens, schema){
   const tool = { name: "answer", description: "Return the answer as structured data.", input_schema: schema };
   let data;
-  for (let attempt = 0; attempt < 2; attempt++){
-    data = await callClaude(system, user + (attempt ? "\nKeep every text field short and concise." : ""), maxTokens, tool);
+  for (let attempt = 0; attempt < 3; attempt++){
+    data = await callClaude(system, user + "\nGive your answer only by calling the answer tool, with no other text." + (attempt ? " Keep every text field short and concise." : ""), maxTokens, tool);
     const block = (data.content || []).find(b => b.type === "tool_use");
     if (data.stop_reason !== "max_tokens" && block && block.input && typeof block.input === "object") return block.input;
     const raw = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
@@ -375,11 +376,12 @@ async function run(text, fn){
   finally { busy(false); renderAll(); }
 }
 const proposeMenu = () => run("Finding two good ideas…", async () => {
-  const fishCount = fishCountForWeek(), names = avoidNames();
+  const draws = [rollFish(), rollFish()], fishCount = draws.filter(Boolean).length, names = avoidNames();
   const res = await generate(
     "Propose exactly 2 recipes that batch well. They should share a few ingredients so shopping stays lean, but differ in cuisine, cooking method and texture (for example one braise, one roast), so the week feels varied.\n" +
     (names.length ? "Don’t repeat these recent recipes: " + names.join(", ") + "\n" : "") +
     (recentCuisines().length ? "Recent cuisines, pick different ones this week: " + recentCuisines().join(", ") + "\n" : "") +
+    `Recipe 1 must be ${kindOf(draws[0])}. Recipe 2 must be ${kindOf(draws[1])}.\n` +
     rulesText(fishCount) + 'JSON format: {"recipes":[' + RECIPE_SHAPE + "," + RECIPE_SHAPE + "]}", fishCount);
   menu = { week: thisWeek, recipes: res.recipes, warnings: res.warnings, fishCount, rejected: [], status: "proposed" };
   store.set("menu", menu);
@@ -387,13 +389,16 @@ const proposeMenu = () => run("Finding two good ideas…", async () => {
 const swapRecipe = idx => run("Looking for another idea…", async () => {
   const other = menu.recipes[1-idx];
   menu.rejected.push(menu.recipes[idx].name);
+  const newFish = rollFish();
+  menu.fishCount = (other.type === "fish" ? 1 : 0) + (newFish ? 1 : 0);
   const res = await generate(
     "Current menu: " + JSON.stringify(menu.recipes) + "\n" +
     `Replace ONLY recipe number ${idx+1} with a different, coherent, seasonal dish from another tradition than "${other.name}", sharing a few of its ingredients. Keep the other recipe exactly as is.\n` +
+    `The new recipe ${idx+1} must be ${kindOf(newFish)}.\n` +
     "Don’t propose any of these: " + avoidNames(menu.rejected).join(", ") + "\n" +
     rulesText(menu.fishCount) + 'JSON format: {"recipes":[' + RECIPE_SHAPE + "," + RECIPE_SHAPE + "]} (both recipes of the final menu, in order)", menu.fishCount);
   menu.recipes = res.recipes; menu.warnings = res.warnings; store.set("menu", menu);
-  toast("New idea found");
+  toast(newFish ? "New idea found, and fish came up" : "New idea found");
 });
 const askChange = text => run("Adjusting your menu…", async () => {
   const res = await generate(
@@ -431,8 +436,8 @@ const keepMenu = () => run("Writing your Coop list…", async () => {
 /* ====== Render: menu ====== */
 function ruleLine(){
   if (S.noFish) return `Vegetarian only, no fish. Protein goal: ${S.protein} g per portion.`;
-  const fc = menu ? menu.fishCount : fishCountForWeek();
-  const fishTxt = fc ? `Includes one fish recipe, to keep you near 1 meal in ${S.fishEvery}.` : `Fully vegetarian this week: you’ve had enough fish lately for 1 meal in ${S.fishEvery}.`;
+  const fc = menu ? menu.fishCount : 0;
+  const fishTxt = fc ? `Fish came up on ${fc === 2 ? "both recipes" : "one recipe"} (1 in ${S.fishEvery} chance each).` : `Vegetarian this time (fish has a 1 in ${S.fishEvery} chance per recipe).`;
   return `${fishTxt} Protein goal: ${S.protein} g per portion.`;
 }
 function renderMenu(){
@@ -543,8 +548,7 @@ function renderSettings(){
   $("#noFish").checked = S.noFish;
   $("#fishStep").classList.toggle("off", S.noFish);
   const {f,t} = fishShare();
-  $("#fHint").textContent = S.noFish ? "Every menu is fully vegetarian. Untick to bring fish back." : "Counted over your last 4 weeks, so some menus include fish and some don’t. " +
-    (t ? `Recently: ${f} of ${t} meals (${Math.round(f/t*100)}%).` : "No history yet, so your first menu includes fish.");
+  $("#fHint").textContent = S.noFish ? "Every menu is fully vegetarian. Untick to bring fish back." : `Every new recipe, including each swap, has a fresh 1 in ${S.fishEvery} chance of being fish.`;
   ["likes","tolerates","dislikes"].forEach(kind => {
     const box = $("#"+kind), cls = kind==="dislikes" ? "no" : kind==="tolerates" ? "mid" : "";
     box.innerHTML = S[kind].map((x,i)=>`<span class="chip ${cls}">${esc(x)}<button aria-label="Remove ${esc(x)}" data-i="${i}">×</button></span>`).join("") || `<span class="hint">Nothing yet.</span>`;
