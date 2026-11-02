@@ -279,13 +279,13 @@ function systemPrompt(){
     "- Simple, everyday, healthy home cooking: easy weeknight food, not restaurant food. Short ingredient lists, nothing hard to find at Coop.\n" +
     `- Quick: each recipe takes ${MAX_MIN} minutes or less from start to finish, prep included. Put the realistic total in "timeMin".\n` +
     "- Seasonal (very important): it is " + new Date().toLocaleDateString("en-GB",{month:"long"}) + " in Switzerland. The fresh vegetables and fruit at the heart of each dish must come from what is in season here now: " + SEASON[new Date().getMonth()] + ". Out-of-season fresh produce is not allowed. Pantry staples, canned tomatoes and pulses, frozen peas or spinach, and lemon or other citrus as an accent are fine.\n" +
-    "- Real: each recipe must be an actual published recipe that you found with web search, ideally from Coop’s own fooby.ch, Betty Bossi, BBC Good Food or a similar reputable site. Stay faithful to it, adapting only what the rules require. Put the exact page you used in \"source\", with the URL copied from your search results.\n" +
+    "- Reliable: invent your own recipes, written like a well-tested home recipe, with sensible quantities, timings and clear steps that work first time.\n" +
     "- Cohesive: each recipe is one coherent dish. Never mash up cuisines or add ingredients just to tick boxes.\n" +
     "- Varied: change cuisines, cooking methods and main proteins from week to week.\n" +
     "Flavours the person likes. Gentle guidance, not a checklist: a dish may feature one or two of them where they truly belong, or none. Never force them in:\n" + list(S.likes) + "\n" +
     "Flavours the person only tolerates (use sparingly, never as the star):\n" + list(S.tolerates) + "\n" +
     "Flavours the person does NOT like (exclude strictly, even as a minor ingredient):\n" + list(S.dislikes) + "\n" +
-    "Search the web for real recipes first, then give your answer by calling the answer tool.";
+    "Always give your answer by calling the answer tool.";
 }
 function rulesText(fishCount){
   const banned = bannedTolerated();
@@ -296,7 +296,7 @@ function rulesText(fishCount){
     "- Use at most one tolerated ingredient across both recipes, only if it truly fits. List any used in \"tolerated\" (else []).\n" +
     "- Never use a disliked ingredient.\n";
 }
-const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","cuisine":"Swiss","timeMin":25,"line":"one appetising sentence","source":{"title":"...","url":"https://..."},"ingredients":[{"name":"...","qty":"for the portions given"}],"steps":["..."],"tolerated":[]}';
+const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","cuisine":"Swiss","timeMin":25,"line":"one appetising sentence","ingredients":[{"name":"...","qty":"for the portions given"}],"steps":["..."],"tolerated":[]}';
 
 const normUrl = u => String(u||"").trim().replace(/#.*$/,"").replace(/\/+$/,"").toLowerCase();
 function checkRecipes(recipes, fishCount, urls){
@@ -315,9 +315,6 @@ function checkRecipes(recipes, fishCount, urls){
   });
   recipes.forEach(r => {
     if (!(Number(r.timeMin) > 0 && Number(r.timeMin) <= MAX_MIN)) p.push(`"${r.name}" must take ${MAX_MIN} minutes or less in total`);
-    const u = normUrl(r.source && r.source.url);
-    if (!u) p.push(`"${r.name}" needs a source URL`);
-    else if (urls && urls.size && !urls.has(u)) p.push(`the source for "${r.name}" must be a page from your web search results`);
     if (!Array.isArray(r.ingredients) || !r.ingredients.length) p.push(`"${r.name}" needs its ingredient list`);
   });
   const tol = recipes.reduce((n,r)=> n + (r.tolerated||[]).length, 0);
@@ -387,9 +384,8 @@ async function callJson(system, user, maxTokens, schema, opts = {}){
 }
 const STR = { type: "string" }, STRS = { type: "array", items: STR };
 const RECIPES_SCHEMA = { type: "object", required: ["recipes"], properties: { recipes: { type: "array", items: { type: "object",
-  required: ["name","short","type","portions","proteinG","protein","cuisine","timeMin","line","source","ingredients","steps","tolerated"],
+  required: ["name","short","type","portions","proteinG","protein","cuisine","timeMin","line","ingredients","steps","tolerated"],
   properties: { name: STR, short: STR, cuisine: STR, timeMin: { type: "integer" }, steps: STRS,
-    source: { type: "object", required: ["title","url"], properties: { title: STR, url: STR } },
     ingredients: { type: "array", items: { type: "object", required: ["name","qty"], properties: { name: STR, qty: STR } } }, type: { type: "string", enum: ["veg","fish"] }, portions: { type: "integer" }, proteinG: { type: "number" }, protein: STR, line: STR, tolerated: STRS } } } } };
 const PLAN_SCHEMA = { type: "object", required: ["list","pantry","days","steps"], properties: {
   list: { type: "array", items: { type: "object", required: ["aisle","items"], properties: { aisle: STR, items: { type: "array", items: { type: "object", required: ["name","qty","tags"], properties: { name: STR, qty: STR, tags: STRS } } } } } },
@@ -399,7 +395,7 @@ const PLAN_SCHEMA = { type: "object", required: ["list","pantry","days","steps"]
 async function generate(prompt, fishCount){
   let problems = [], recipes = null;
   for (let i = 0; i < 3; i++){
-    const { input: d, urls } = await callJson(systemPrompt(), prompt + (problems.length ? "\nYour previous answer had these problems, fix them: " + problems.join("; ") : ""), 6000, RECIPES_SCHEMA, { search: true });
+    const { input: d, urls } = await callJson(systemPrompt(), prompt + (problems.length ? "\nYour previous answer had these problems, fix them: " + problems.join("; ") : ""), 4000, RECIPES_SCHEMA);
     recipes = (d.recipes || []).slice(0, 2);
     problems = recipes.length === 2 ? checkRecipes(recipes, fishCount, urls) : ["there must be exactly 2 recipes"];
     if (!problems.length) return { recipes, warnings: [] };
@@ -419,7 +415,7 @@ async function run(text, fn){
 const proposeMenu = () => run("Finding two good ideas…", async () => {
   const draws = [rollFish(), rollFish()], fishCount = draws.filter(Boolean).length, names = avoidNames();
   const res = await generate(
-    `Find exactly 2 real, simple, seasonal recipes, each ready in ${MAX_MIN} minutes or less, that keep well in the fridge. They should share a few ingredients so shopping stays lean, but differ in cuisine and texture, so the week feels varied.\n` +
+    `Create exactly 2 simple, seasonal recipes, each ready in ${MAX_MIN} minutes or less, that keep well in the fridge. They should share a few ingredients so shopping stays lean, but differ in cuisine and texture, so the week feels varied.\n` +
     (names.length ? "Don’t repeat these recent recipes: " + names.join(", ") + "\n" : "") +
     (recentCuisines().length ? "Recent cuisines, pick different ones this week: " + recentCuisines().join(", ") + "\n" : "") +
     `Recipe 1 must be ${kindOf(draws[0])}. Recipe 2 must be ${kindOf(draws[1])}.\n` +
@@ -434,7 +430,7 @@ const swapRecipe = idx => run("Looking for another idea…", async () => {
   menu.fishCount = (other.type === "fish" ? 1 : 0) + (newFish ? 1 : 0);
   const res = await generate(
     "Current menu: " + JSON.stringify(menu.recipes) + "\n" +
-    `Replace ONLY recipe number ${idx+1} with a different real, simple, seasonal recipe (${MAX_MIN} minutes or less) from another cuisine than "${other.name}", sharing a few of its ingredients. Keep the other recipe exactly as is, including its source, ingredients and steps.\n` +
+    `Replace ONLY recipe number ${idx+1} with a different simple, seasonal recipe (${MAX_MIN} minutes or less) from another cuisine than "${other.name}", sharing a few of its ingredients. Keep the other recipe exactly as is, including its ingredients and steps.\n` +
     `The new recipe ${idx+1} must be ${kindOf(newFish)}.\n` +
     "Don’t propose any of these: " + avoidNames(menu.rejected).join(", ") + "\n" +
     rulesText(menu.fishCount) + 'JSON format: {"recipes":[' + RECIPE_SHAPE + "," + RECIPE_SHAPE + "]} (both recipes of the final menu, in order)", menu.fishCount);
