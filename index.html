@@ -185,6 +185,10 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--citrus);outline
     <ul class="hist" id="hist"></ul>
     <button class="ghost" id="clearHist" style="margin-left:0">Clear history</button>
 
+    <label class="f">Troubleshooting</label>
+    <div class="hint" id="lastErr" style="margin-top:0;white-space:pre-wrap;overflow-wrap:anywhere"></div>
+    <button class="ghost" id="copyErr" style="margin-left:0">Copy error details</button>
+
     <label class="f">Weekly reminder</label>
     <div class="hint" style="margin-top:0">Set a repeating Monday 8:00 reminder on your phone, and open Panier when it rings.</div>
   </section>
@@ -254,7 +258,7 @@ function systemPrompt(){
     "Flavours the person likes (lean into these):\n" + list(S.likes) + "\n" +
     "Flavours the person only tolerates (use sparingly, never as the star):\n" + list(S.tolerates) + "\n" +
     "Flavours the person does NOT like (exclude strictly, even as a minor ingredient):\n" + list(S.dislikes) + "\n" +
-    "Reply ONLY with one valid JSON object. No text around it, no markdown fences.";
+    "Always give your answer by calling the answer tool.";
 }
 function rulesText(fishCount){
   const banned = bannedTolerated();
@@ -265,7 +269,7 @@ function rulesText(fishCount){
     "- Use at most one tolerated ingredient across both recipes, only if it truly fits. List any used in \"tolerated\" (else []).\n" +
     "- Never use a disliked ingredient.\n";
 }
-const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg"|"fish","portions":3,"proteinG":28,"protein":"lentils, feta","line":"one appetising sentence","tolerated":[]}';
+const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","line":"one appetising sentence","tolerated":[]}';
 
 function checkRecipes(recipes, fishCount){
   const p = [];
@@ -287,7 +291,7 @@ function checkRecipes(recipes, fishCount){
 }
 
 /* ====== Claude API ====== */
-async function callClaude(system, user, maxTokens){
+async function callClaude(system, user, maxTokens, tool){
   if (!S.key) throw new Error("Add your Anthropic API key in Settings first.");
   let res;
   try {
@@ -299,7 +303,8 @@ async function callClaude(system, user, maxTokens){
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
-      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] })
+      body: JSON.stringify(Object.assign({ model: MODEL, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] },
+        tool ? { tools: [tool], tool_choice: { type: "tool", name: tool.name } } : {}))
     });
   } catch(e){ throw new Error("Couldn’t reach Anthropic. Check your connection and try again."); }
   const data = await res.json().catch(()=> ({}));
@@ -308,21 +313,46 @@ async function callClaude(system, user, maxTokens){
     if (res.status === 401) throw new Error("Your API key was rejected. Check it in Settings.");
     if (res.status === 429) throw new Error("Rate limit reached. Wait a minute and try again.");
     if (res.status === 529 || res.status >= 500) throw new Error("Anthropic is busy right now. Try again shortly.");
+    logErr({ status: res.status, message: m });
     throw new Error("Anthropic error: " + m);
   }
-  return (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+  return data;
 }
-async function callJson(system, user, maxTokens){
-  const raw = await callClaude(system, user, maxTokens);
-  const clean = raw.replace(/```json|```/g, "").trim();
+function tryParse(raw){
+  const clean = String(raw||"").replace(/```json|```/g, "").trim();
   const s = clean.indexOf("{"), e = clean.lastIndexOf("}");
-  try { return JSON.parse(clean.slice(s, e+1)); }
-  catch(err){ throw new Error("Claude’s answer wasn’t readable. Try again."); }
+  if (s < 0 || e <= s) return null;
+  try { return JSON.parse(clean.slice(s, e+1)); } catch(err){ return null; }
 }
+function logErr(info){ store.set("lastError", Object.assign({ when: new Date().toISOString(), model: MODEL }, info)); }
+async function callJson(system, user, maxTokens, schema){
+  const tool = { name: "answer", description: "Return the answer as structured data.", input_schema: schema };
+  let data;
+  for (let attempt = 0; attempt < 2; attempt++){
+    data = await callClaude(system, user + (attempt ? "\nKeep every text field short and concise." : ""), maxTokens, tool);
+    const block = (data.content || []).find(b => b.type === "tool_use");
+    if (data.stop_reason !== "max_tokens" && block && block.input && typeof block.input === "object") return block.input;
+    const raw = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+    const parsed = data.stop_reason !== "max_tokens" && tryParse(raw);
+    if (parsed) return parsed;
+    logErr({ stop_reason: data.stop_reason, text: raw.slice(0, 1500), tool_input: block ? JSON.stringify(block.input).slice(0, 1500) : null });
+  }
+  throw new Error(data && data.stop_reason === "max_tokens" ? "Claude’s answer was cut off. Try again." : "Claude’s answer wasn’t readable. Details are in Settings → Troubleshooting.");
+}
+const STR = { type: "string" }, STRS = { type: "array", items: STR };
+const RECIPES_SCHEMA = { type: "object", required: ["recipes"], properties: { recipes: { type: "array", items: { type: "object",
+  required: ["name","short","type","portions","proteinG","protein","line","tolerated"],
+  properties: { name: STR, short: STR, type: { type: "string", enum: ["veg","fish"] }, portions: { type: "integer" }, proteinG: { type: "number" }, protein: STR, line: STR, tolerated: STRS } } } } };
+const PLAN_SCHEMA = { type: "object", required: ["list","pantry","recipes","days","steps"], properties: {
+  list: { type: "array", items: { type: "object", required: ["aisle","items"], properties: { aisle: STR, items: { type: "array", items: { type: "object", required: ["name","qty","tags"], properties: { name: STR, qty: STR, tags: STRS } } } } } },
+  pantry: STRS,
+  recipes: { type: "array", items: { type: "object", required: ["name","short","portions","time","steps"], properties: { name: STR, short: STR, portions: { type: "integer" }, time: STR, steps: STRS } } },
+  days: { type: "array", items: { type: "object", required: ["day","recipe"], properties: { day: STR, recipe: { type: "integer" } } } },
+  steps: STRS } };
 async function generate(prompt, fishCount){
   let problems = [], recipes = null;
   for (let i = 0; i < 3; i++){
-    const d = await callJson(systemPrompt(), prompt + (problems.length ? "\nYour previous answer had these problems, fix them: " + problems.join("; ") : ""), 1500);
+    const d = await callJson(systemPrompt(), prompt + (problems.length ? "\nYour previous answer had these problems, fix them: " + problems.join("; ") : ""), 2000, RECIPES_SCHEMA);
     recipes = (d.recipes || []).slice(0, 2);
     problems = recipes.length === 2 ? checkRecipes(recipes, fishCount) : ["there must be exactly 2 recipes"];
     if (!problems.length) return { recipes, warnings: [] };
@@ -380,7 +410,7 @@ const keepMenu = () => run("Writing your Coop list…", async () => {
     "- \"days\": Monday to Friday, which recipe (1 or 2) is eaten each day.\n" +
     "- \"steps\": cooking order to run things in parallel, how to portion into boxes, what stays in the fridge (3 to 4 days), what to freeze for the last days, what to add only at serving time.\n" +
     'JSON format: {"list":[{"aisle":"...","items":[{"name":"...","qty":"...","tags":["..."]}]}],"pantry":["..."],' +
-    '"recipes":[{"name":"...","short":"...","portions":3,"time":"35 min","steps":["..."]}],"days":[{"day":"Mon","recipe":1}],"steps":["..."]}', 6000);
+    '"recipes":[{"name":"...","short":"...","portions":3,"time":"35 min","steps":["..."]}],"days":[{"day":"Mon","recipe":1}],"steps":["..."]}', 8000, PLAN_SCHEMA);
   if (!Array.isArray(d.list) || !d.list.length) throw new Error("The list came back empty. Try again.");
   plan = Object.assign({ week: thisWeek }, d);
   store.set("plan", plan);
@@ -513,6 +543,9 @@ function renderSettings(){
     box.innerHTML = S[kind].map((x,i)=>`<span class="chip ${cls}">${esc(x)}<button aria-label="Remove ${esc(x)}" data-i="${i}">×</button></span>`).join("") || `<span class="hint">Nothing yet.</span>`;
     box.querySelectorAll("button").forEach(b => b.onclick = () => { S[kind].splice(+b.dataset.i,1); save(kind); renderSettings(); });
   });
+  const le = store.get("lastError", null);
+  $("#lastErr").textContent = le ? `Last problem (${le.when.slice(0,16).replace("T"," ")}): ${le.message || le.stop_reason || "unreadable answer"}` : "No errors so far.";
+  $("#copyErr").style.display = le ? "block" : "none";
   const h = history.slice().reverse();
   $("#hist").innerHTML = h.length ? h.slice(0,10).map(x=>`<li>${esc(x.name)}<span>${x.type==="fish"?"fish, ":""}${esc(x.week)}</span></li>`).join("") : `<li class="hint">Nothing yet.</li>`;
 }
@@ -537,6 +570,7 @@ $("#noFish").onchange = e => { S.noFish = e.target.checked; save("noFish"); rend
 $("#key").value = S.key;
 $("#key").addEventListener("change", e => { S.key = e.target.value.trim(); save("key"); renderMenu(); toast(S.key ? "Key saved on this phone" : "Key removed"); });
 $("#keyTest").onclick = () => { S.key = $("#key").value.trim(); save("key"); run("Checking your key…", async () => { await callClaude("Reply with the single word OK.", "Ping", 5); toast("Key works. Let’s cook!"); }); };
+$("#copyErr").onclick = async () => { try { await navigator.clipboard.writeText(JSON.stringify(store.get("lastError", {}), null, 2)); toast("Copied. Paste it to Claude."); } catch(e){ toast("Couldn’t copy on this phone"); } };
 $("#clearHist").onclick = () => { if (confirm("Clear your menu history? Fish and tolerated-flavour tracking start fresh.")) { history = []; store.set("history", history); renderSettings(); } };
 
 /* ====== Navigation ====== */
