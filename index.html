@@ -255,7 +255,12 @@ function systemPrompt(){
     "- For 1 person, about 5 to 6 portions spread over Monday to Friday.\n" +
     "- Healthy, bold flavours, simple cooking, keeps 3 to 4 days in the fridge, freezes well, recipes share ingredients.\n" +
     "- Store: Coop (Switzerland). Metric units, products sold there.\n" +
-    "Flavours the person likes (lean into these):\n" + list(S.likes) + "\n" +
+    "How to cook for this person:\n" +
+    "- Cohesive: each recipe is one coherent dish rooted in a real culinary tradition (a Sicilian caponata, a Keralan moilee, a Persian kuku). Never mash up cuisines or stack ingredients to tick boxes. Every ingredient must earn its place.\n" +
+    "- Seasonal: it is " + new Date().toLocaleDateString("en-GB",{month:"long"}) + " in Switzerland. Build each dish around produce that is in season here right now, and avoid out-of-season produce.\n" +
+    "- Inspired: cook like a thoughtful chef. Give each dish one signature touch (a sauce, a crunchy topping, a quick pickle, a herb oil) that makes it feel special, while keeping it simple to batch cook.\n" +
+    "- Varied: change cuisines, cooking methods and main proteins from week to week.\n" +
+    "Flavours the person likes. Gentle guidance, not a checklist: a dish may feature one or two of them where they truly belong, or none. Never force them in:\n" + list(S.likes) + "\n" +
     "Flavours the person only tolerates (use sparingly, never as the star):\n" + list(S.tolerates) + "\n" +
     "Flavours the person does NOT like (exclude strictly, even as a minor ingredient):\n" + list(S.dislikes) + "\n" +
     "Always give your answer by calling the answer tool.";
@@ -269,7 +274,7 @@ function rulesText(fishCount){
     "- Use at most one tolerated ingredient across both recipes, only if it truly fits. List any used in \"tolerated\" (else []).\n" +
     "- Never use a disliked ingredient.\n";
 }
-const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","line":"one appetising sentence","tolerated":[]}';
+const RECIPE_SHAPE = '{"name":"...","short":"one or two words","type":"veg or fish","portions":3,"proteinG":28,"protein":"lentils, feta","cuisine":"Sicilian","line":"one appetising sentence","tolerated":[]}';
 
 function checkRecipes(recipes, fishCount){
   const p = [];
@@ -341,8 +346,8 @@ async function callJson(system, user, maxTokens, schema){
 }
 const STR = { type: "string" }, STRS = { type: "array", items: STR };
 const RECIPES_SCHEMA = { type: "object", required: ["recipes"], properties: { recipes: { type: "array", items: { type: "object",
-  required: ["name","short","type","portions","proteinG","protein","line","tolerated"],
-  properties: { name: STR, short: STR, type: { type: "string", enum: ["veg","fish"] }, portions: { type: "integer" }, proteinG: { type: "number" }, protein: STR, line: STR, tolerated: STRS } } } } };
+  required: ["name","short","type","portions","proteinG","protein","cuisine","line","tolerated"],
+  properties: { name: STR, short: STR, cuisine: STR, type: { type: "string", enum: ["veg","fish"] }, portions: { type: "integer" }, proteinG: { type: "number" }, protein: STR, line: STR, tolerated: STRS } } } } };
 const PLAN_SCHEMA = { type: "object", required: ["list","pantry","recipes","days","steps"], properties: {
   list: { type: "array", items: { type: "object", required: ["aisle","items"], properties: { aisle: STR, items: { type: "array", items: { type: "object", required: ["name","qty","tags"], properties: { name: STR, qty: STR, tags: STRS } } } } } },
   pantry: STRS,
@@ -360,6 +365,7 @@ async function generate(prompt, fishCount){
   if (!recipes || recipes.length !== 2) throw new Error("Claude didn’t return 2 valid recipes. Try again.");
   return { recipes, warnings: problems };
 }
+const recentCuisines = () => [...new Set(recent(21).map(h => h.cuisine).filter(Boolean))];
 const avoidNames = extra => history.map(h=>h.name).concat(extra||[]);
 
 /* ====== Actions ====== */
@@ -371,8 +377,9 @@ async function run(text, fn){
 const proposeMenu = () => run("Finding two good ideas…", async () => {
   const fishCount = fishCountForWeek(), names = avoidNames();
   const res = await generate(
-    "Propose exactly 2 recipes that batch well and share ingredients.\n" +
+    "Propose exactly 2 recipes that batch well. They should share a few ingredients so shopping stays lean, but differ in cuisine, cooking method and texture (for example one braise, one roast), so the week feels varied.\n" +
     (names.length ? "Don’t repeat these recent recipes: " + names.join(", ") + "\n" : "") +
+    (recentCuisines().length ? "Recent cuisines, pick different ones this week: " + recentCuisines().join(", ") + "\n" : "") +
     rulesText(fishCount) + 'JSON format: {"recipes":[' + RECIPE_SHAPE + "," + RECIPE_SHAPE + "]}", fishCount);
   menu = { week: thisWeek, recipes: res.recipes, warnings: res.warnings, fishCount, rejected: [], status: "proposed" };
   store.set("menu", menu);
@@ -382,7 +389,7 @@ const swapRecipe = idx => run("Looking for another idea…", async () => {
   menu.rejected.push(menu.recipes[idx].name);
   const res = await generate(
     "Current menu: " + JSON.stringify(menu.recipes) + "\n" +
-    `Replace ONLY recipe number ${idx+1} with another that shares ingredients with "${other.name}". Keep the other recipe exactly as is.\n` +
+    `Replace ONLY recipe number ${idx+1} with a different, coherent, seasonal dish from another tradition than "${other.name}", sharing a few of its ingredients. Keep the other recipe exactly as is.\n` +
     "Don’t propose any of these: " + avoidNames(menu.rejected).join(", ") + "\n" +
     rulesText(menu.fishCount) + 'JSON format: {"recipes":[' + RECIPE_SHAPE + "," + RECIPE_SHAPE + "]} (both recipes of the final menu, in order)", menu.fishCount);
   menu.recipes = res.recipes; menu.warnings = res.warnings; store.set("menu", menu);
@@ -415,7 +422,7 @@ const keepMenu = () => run("Writing your Coop list…", async () => {
   plan = Object.assign({ week: thisWeek }, d);
   store.set("plan", plan);
   checks = {}; store.set("checks", checks);
-  history = history.concat(menu.recipes.map(r => ({ name: r.name, type: r.type, portions: r.portions||3, week: thisWeek, tolerated: r.tolerated||[] }))).slice(-24);
+  history = history.concat(menu.recipes.map(r => ({ name: r.name, type: r.type, cuisine: r.cuisine||"", portions: r.portions||3, week: thisWeek, tolerated: r.tolerated||[] }))).slice(-24);
   store.set("history", history);
   menu.status = "final"; store.set("menu", menu);
   show("list"); toast("Your Coop list is ready");
@@ -444,7 +451,7 @@ function renderMenu(){
     `<p class="rule">${esc(ruleLine())}</p>` +
     (menu.warnings && menu.warnings.length ? `<p class="warnbox">Heads up: ${esc(menu.warnings.join("; "))}.</p>` : "") +
     menu.recipes.map((r,i) => `<article class="recipe ${r.type==="fish"?"fish":""}">
-      <span class="kind">${r.type==="fish"?"Fish":"Vegetarian"}</span>
+      <span class="kind">${r.type==="fish"?"Fish":"Vegetarian"}${r.cuisine?", "+esc(r.cuisine):""}</span>
       <h2>${esc(r.name)}</h2><p>${esc(r.line)}</p>
       <div class="facts"><div><b>${esc(r.portions||3)}</b>portions</div>
         <div><b>${esc(r.proteinG)} g</b>${Number(r.proteinG)>=S.protein?"protein, goal met ✓":"protein, under your goal"}</div>
